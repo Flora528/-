@@ -103,6 +103,8 @@
   .wronggroup{margin-bottom:22px}
   .wronggroup h3{font-size:13px;color:#2e5c9a;margin:0 0 8px;display:flex;justify-content:space-between;align-items:baseline}
   .wronggroup h3 span{font-size:11px;color:#8695a6;font-weight:400}
+  .wrow{margin:8px 0 2px 36px}
+  .wrow .btn{font-size:12px;padding:6px 14px}
   .empty{text-align:center;color:#9aa8b8;font-size:13px;padding:50px 20px;line-height:2}
 
   .opt,.tag,.tab,select,button{-webkit-tap-highlight-color:transparent;touch-action:manipulation}
@@ -137,7 +139,7 @@
 </head>
 <body>
 <header>
-  <h1>六级判分台</h1><span class="ver">11-15 11:27</span>
+  <h1>六级判分台</h1><span class="ver">11-15 11:35</span>
   <select id="paper"></select>
   <span class="stat">已答 <b id="done">0</b>/30</span>
   <span class="spacer"></span>
@@ -212,7 +214,7 @@ function statOf(pid){
   }
   return { done, hit, submitted: !!r._submitted };
 }
-function allWrong(){
+function allWrong(includeMastered){
   const out = [];
   PAPERS.forEach(pid => {
     const r = rec(pid);
@@ -220,7 +222,9 @@ function allWrong(){
     for (let n = 26; n <= 55; n++) {
       const o = r[n];
       if (!o || !o.a) continue;
-      if (o.a !== correctOf(pid, n)) out.push({ pid, no: n, mine: o.a, ans: correctOf(pid, n), tag: o.t || "" });
+      if (o.a === correctOf(pid, n)) continue;
+      if (o.m && !includeMastered) continue;
+      out.push({ pid, no: n, mine: o.a, ans: correctOf(pid, n), tag: o.t || "", m: !!o.m });
     }
   });
   return out;
@@ -423,20 +427,36 @@ function renderSubmitBar(){
 }
 
 // ---------- 渲染：错题集 ----------
+let wShowWrong = "todo";  // todo | done
+
 function renderWrong(){
   const host = document.getElementById("wrong");
-  const list = allWrong();
+  const sc = window.scrollY || document.documentElement.scrollTop || 0;
+  const todoList = allWrong(false);
+  const doneList = allWrong(true).filter(x => x.m);
+  const list = wShowWrong === "todo" ? todoList : doneList;
+
+  let html = '<div class="wbar">' +
+    '<div class="wseg">' +
+      '<button data-wshow="todo" class="' + (wShowWrong === "todo" ? "on" : "") + '">待消化 ' + todoList.length + '</button>' +
+      '<button data-wshow="done" class="' + (wShowWrong === "done" ? "on" : "") + '">已掌握 ' + doneList.length + '</button>' +
+    '</div>' +
+    '<span class="sp"></span>' +
+    '<span class="muted">错题不会被删除，只会归档</span>' +
+  '</div>';
+
   if (!list.length) {
-    host.innerHTML = '<div class="empty">还没有错题。<br>做一套题并点「提交本套」后，错题会自动汇总到这里。</div>';
+    host.innerHTML = html + '<div class="empty">' +
+      (wShowWrong === "todo"
+        ? "没有待消化的错题。<br>做一套题并提交后，错题会自动汇总到这里。"
+        : "还没有标记为「已掌握」的错题。") + '</div>';
+    bindWrong(host);
+    if (sc > 0) window.scrollTo(0, sc);
     return;
   }
+
   const byPaper = {};
   list.forEach(w => { (byPaper[w.pid] = byPaper[w.pid] || []).push(w); });
-
-  let html = '<div class="card"><div class="flex">' +
-    '<div><div class="big">' + list.length + '</div><div class="muted">错题总数</div></div>' +
-    '<div><div class="big">' + Object.keys(byPaper).length + '</div><div class="muted">涉及套数</div></div>' +
-    '</div></div>';
 
   Object.keys(byPaper).sort().forEach(pid => {
     const ws = byPaper[pid];
@@ -448,31 +468,49 @@ function renderWrong(){
       html += '<div class="q miss" data-pid="' + pid + '" data-no="' + w.no + '">' +
         '<div class="qhead"><div class="no">' + w.no + '</div><div class="stem">' + esc(stem) + '</div></div>' +
         '<div class="mark" style="display:block"><span class="lab">我的 ' + w.mine + ' → 正确 ' + w.ans + '　错因：</span>' +
-        '<span class="tagslot"></span></div></div>';
+        '<span class="tagslot"></span></div>' +
+        '<div class="wrow"><button class="btn btn-ghost wmaster" data-act="' + (w.m ? "undo" : "done") + '">' +
+        (w.m ? "移回待消化" : "✓ 已掌握") + '</button></div>' +
+      '</div>';
     });
     html += '</div>';
   });
   host.innerHTML = html;
+  bindWrong(host);
+  if (sc > 0) window.scrollTo(0, sc);
+}
 
-  // 绑定错因标签
+function bindWrong(host){
+  host.querySelectorAll(".wseg button[data-wshow]").forEach(b => {
+    b.onclick = () => { wShowWrong = b.dataset.wshow; renderWrong(); };
+  });
   host.querySelectorAll(".wronggroup .q").forEach(el => {
     const pid = el.dataset.pid, no = parseInt(el.dataset.no, 10);
     const slot = el.querySelector(".tagslot");
-    const curTag = (rec(pid)[no] && rec(pid)[no].t) || "";
-    TAGS.forEach(t => {
-      const b = document.createElement("button");
-      b.className = "tag" + (curTag === t ? " on" : "");
-      b.textContent = t;
-      b.onclick = () => {
+    if (slot) {
+      const curTag = (rec(pid)[no] && rec(pid)[no].t) || "";
+      TAGS.forEach(t => {
+        const b = document.createElement("button");
+        b.className = "tag" + (curTag === t ? " on" : "");
+        b.textContent = t;
+        b.onclick = () => {
+          const rr = rec(pid); rr[no] = rr[no] || {};
+          rr[no].t = (rr[no].t === t) ? "" : t;
+          save(); renderWrong(); renderTop();
+        };
+        slot.appendChild(b);
+      });
+    }
+    const mb = el.querySelector(".wmaster");
+    if (mb) {
+      mb.onclick = () => {
         const rr = rec(pid); rr[no] = rr[no] || {};
-        rr[no].t = (rr[no].t === t) ? "" : t;
-        save(); render();
+        rr[no].m = !rr[no].m;
+        save(); renderWrong(); renderTop();
       };
-      slot.appendChild(b);
-    });
+    }
   });
 }
-
 function esc(s){
   return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 }
