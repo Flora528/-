@@ -87,6 +87,27 @@
   .modal textarea{width:100%;height:240px;font-family:Consolas,monospace;font-size:13px;padding:10px;border:1px solid #cfd8e3;border-radius:8px;resize:vertical;line-height:1.6}
   .modal .hint{font-size:11px;color:#8695a6;line-height:1.7}
   .modal .acts{display:flex;gap:10px;justify-content:flex-end}
+  /* 背单词卡片模式 */
+  .learnwrap{max-width:560px;margin:0 auto}
+  .learnbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+  .learnbar .prog{font-size:13px;color:#5d6b7a;font-variant-numeric:tabular-nums}
+  .learnbar .prog b{font-size:19px;color:#1f3864}
+  .learnbar .sp{flex:1}
+  .lcard{background:#fff;border:1px solid #e2e8f0;border-radius:14px;min-height:230px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:30px 22px;cursor:pointer;box-shadow:0 4px 20px rgba(31,56,100,.07);transition:.15s}
+  .lcard:active{transform:scale(.995)}
+  .lcard .lw{font-size:34px;font-weight:700;color:#1f3864;font-family:Consolas,monospace;letter-spacing:.5px;text-align:center;word-break:break-word;line-height:1.25}
+  .lcard .ld{font-size:16px;color:#2b3a4a;line-height:1.75;text-align:center;-webkit-user-select:text;user-select:text}
+  .lcard .lhint{font-size:12px;color:#b6c2d0}
+  .lacts{display:flex;gap:12px;margin-top:16px}
+  .lacts .btn{flex:1;padding:15px;font-size:15px;border-radius:10px}
+  .btn-skip{background:#fff;border:1px solid #cfd8e3;color:#33414f;font-weight:500}
+  .btn-skip:hover{border-color:#2e5c9a;color:#2e5c9a}
+  .btn-done{background:#1d7a45;color:#fff}
+  .btn-done:hover{background:#166138}
+  .ldone{text-align:center;padding:46px 20px}
+  .ldone .big{font-size:40px;margin-bottom:8px}
+  .progbar{height:8px;background:#e9eef5;border-radius:5px;overflow:hidden;margin-bottom:16px}
+  .progbar i{display:block;height:100%;background:#1d7a45;border-radius:5px;transition:width .25s}
   .card{background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:16px 18px;margin-bottom:16px}
   .card h3{font-size:13px;margin:0 0 12px;color:#2e5c9a}
   table{width:100%;border-collapse:collapse;font-size:13px}
@@ -139,7 +160,7 @@
 </head>
 <body>
 <header>
-  <h1>六级判分台</h1><span class="ver">11-15 15:46</span>
+  <h1>六级判分台</h1><span class="ver">11-15 16:46</span>
   <select id="paper"></select>
   <span class="stat">已答 <b id="done">0</b>/20</span>
   <span class="spacer"></span>
@@ -520,7 +541,43 @@ function wsave(){ try{ localStorage.setItem(WKEY, JSON.stringify(wState)); }catc
 
 let wSort = "ans";   // ans | freq | az
 let wShow = "todo";  // todo | done
+let wMode = "list";  // list | card
 const flipped = new Set();
+
+// ---------- 每日背词任务 ----------
+const DKEY = "cet6-daily-v1";
+let daily = {};
+try { daily = JSON.parse(localStorage.getItem(DKEY) || "{}") || {}; } catch (e) { daily = {}; }
+function dsave(){ try{ localStorage.setItem(DKEY, JSON.stringify(daily)); }catch(e){} }
+function todayStr(){
+  const d = new Date();
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
+function poolByAns(){
+  const keep = wSort;
+  wSort = "ans";
+  const arr = wordList().filter(x => !x.done).map(x => x.w);
+  wSort = keep;
+  return arr;
+}
+function ensureDaily(){
+  if (!daily.target) daily.target = 25;
+  const t = todayStr();
+  if (daily.date !== t) {
+    daily = { date: t, target: daily.target, done: 0, idx: 0, pool: null, flipped: false };
+  }
+  if (!daily.pool) {
+    daily.pool = poolByAns();
+    daily.idx = 0;
+    daily.flipped = false;
+  }
+  dsave();
+}
+function markWordDone(w, val){
+  if (!wState[w]) wState[w] = {};
+  wState[w].done = val;
+  wsave();
+}
 
 function wordList(){
   const map = {};
@@ -559,7 +616,89 @@ function toggleWord(w){
   renderTop();
 }
 
+function renderLearn(){
+  ensureDaily();
+  const host = document.getElementById("words");
+  const total = daily.pool.length;
+  const target = daily.target;
+  const doneN = daily.done;
+  const pct = Math.min(100, Math.round(doneN * 100 / Math.max(1, target)));
+
+  // 结束状态
+  if (daily.idx >= total || doneN >= target) {
+    const finished = doneN >= target;
+    host.innerHTML = '<div class="learnwrap"><div class="ldone">' +
+      '<div class="big">' + (finished ? "🎉" : "📖") + '</div>' +
+      '<div style="font-size:17px;color:#1f3864;font-weight:600;margin-bottom:6px">' +
+        (finished ? "今日任务完成　" + doneN + "/" + target : "今天的词背完了　" + doneN + "/" + target) + '</div>' +
+      '<div class="muted" style="margin-bottom:20px">' +
+        (finished ? "明天再来。" : "待背的词不够了，明天继续。") + '</div>' +
+      '<button class="btn btn-primary" id="backList">回到词汇列表</button>' +
+      '</div></div>';
+    document.getElementById("backList").onclick = () => { wMode = "list"; renderWords(); };
+    return;
+  }
+
+  // 跳过已在别处标记为已背熟的词
+  while (daily.idx < total) {
+    const cand = daily.pool[daily.idx];
+    if (wState[cand] && wState[cand].done) { daily.idx++; } else { break; }
+  }
+  dsave();
+  if (daily.idx >= total || doneN >= target) { renderLearn(); return; }
+
+  const w = daily.pool[daily.idx];
+  const all = wordList();
+  const obj = all.find(x => x.w === w) || { def: "", a: 0, f: 0, d: 0 };
+  const showDef = !!daily.flipped;
+
+  let html = '<div class="learnwrap">' +
+    '<div class="learnbar">' +
+      '<span class="prog">今日 <b>' + doneN + '</b>/' + target + '</span>' +
+      '<span class="sp"></span>' +
+      '<span class="prog">第 ' + (daily.idx + 1) + ' / ' + total + ' 张</span>' +
+      '<button class="btn btn-ghost" id="quitLearn">退出</button>' +
+    '</div>' +
+    '<div class="progbar"><i style="width:' + pct + '%"></i></div>' +
+    '<div class="lcard" id="lcard">' +
+      '<div class="lw">' + esc(w) + '</div>' +
+      (showDef
+        ? '<div class="ld">' + esc(obj.def || "（无释义）") + '</div>'
+        : '<div class="lhint">点一下看释义</div>') +
+    '</div>' +
+    '<div class="lacts">' +
+      '<button class="btn btn-skip" id="btnNext">下一个</button>' +
+      '<button class="btn btn-done" id="btnKnown">已背熟</button>' +
+    '</div>' +
+    '<div class="muted" style="text-align:center;margin-top:12px">' +
+      '「下一个」只是跳过，不算背熟；「已背熟」才计入今日进度</div>' +
+  '</div>';
+
+  host.innerHTML = html;
+
+  const card = document.getElementById("lcard");
+  card.onclick = () => { daily.flipped = !daily.flipped; dsave(); renderLearn(); };
+
+  document.getElementById("btnNext").onclick = () => {
+    daily.idx++;
+    daily.flipped = false;
+    dsave();
+    renderLearn();
+  };
+  document.getElementById("btnKnown").onclick = () => {
+    markWordDone(w, true);
+    daily.done++;
+    daily.idx++;
+    daily.flipped = false;
+    dsave();
+    renderLearn();
+    renderTop();
+  };
+  document.getElementById("quitLearn").onclick = () => { wMode = "list"; renderWords(); };
+}
+
 function renderWords(){
+  if (wMode === "card") { renderLearn(); return; }
   const host = document.getElementById("words");
   const sc = window.scrollY || document.documentElement.scrollTop || 0;
   const all = wordList();
@@ -579,6 +718,17 @@ function renderWords(){
       '<button data-sort="az" class="' + (wSort === "az" ? "on" : "") + '">按字母</button>' +
     '</div>' +
     '<button class="btn btn-ghost" id="btnImportWords">导入词汇</button>' +
+    '<button class="btn btn-primary" id="btnStartLearn">开始背单词</button>' +
+  '</div>';
+
+  const dTarget = daily.target || 25;
+  const dDone = (daily.date === todayStr()) ? (daily.done || 0) : 0;
+  html += '<div class="wbar" style="margin-top:-4px">' +
+    '<span class="muted">每日目标</span>' +
+    '<select id="selTarget" style="font-size:12px;padding:4px 8px">' +
+      [10,15,20,25,30,40,50].map(v => '<option value="' + v + '"' + (v === dTarget ? " selected" : "") + '>' + v + ' 个</option>').join("") +
+    '</select>' +
+    '<span class="muted">今日已完成 ' + dDone + ' / ' + dTarget + '</span>' +
   '</div>';
 
   html += '<div class="wsec">' + (wShow === "todo" ? "待背" : "已背熟") +
@@ -639,6 +789,25 @@ function renderWords(){
 
   const bi = document.getElementById("btnImportWords");
   if (bi) bi.onclick = openImportWords;
+
+  const bs = document.getElementById("btnStartLearn");
+  if (bs) bs.onclick = () => {
+    ensureDaily();
+    if (!daily.pool || !daily.pool.length) {
+      alert("没有待背的词了。去「已背熟」里移回来一些，或导入新词。");
+      return;
+    }
+    wMode = "card";
+    renderWords();
+  };
+
+  const sel = document.getElementById("selTarget");
+  if (sel) sel.onchange = () => {
+    daily.target = parseInt(sel.value, 10) || 25;
+    dsave();
+    renderWords();
+  };
+
   if (sc > 0) window.scrollTo(0, sc);
 }
 
@@ -754,7 +923,8 @@ function renderStats(){
     '<button class="btn btn-ghost" id="btnImport">导入记录 JSON</button>' +
     '<button class="btn btn-ghost" id="btnCsv">导出 CSV</button>' +
     '</div>' +
-    '<div class="muted" style="margin-top:10px">换设备 / 换浏览器时：先导出，再在新设备里导入。</div></div>';
+    '<div id="bkStatus" class="muted" style="margin-top:10px;line-height:1.8"></div>' +
+    '<div class="muted" style="margin-top:6px">换设备 / 换浏览器 / 清缓存前：先导出，再在新设备里导入。</div></div>';
 
   host.innerHTML = html;
 
@@ -764,6 +934,7 @@ function renderStats(){
     a.href = URL.createObjectURL(blob);
     a.download = "cet6-records-" + new Date().toISOString().slice(0, 10) + ".json";
     a.click();
+    try { localStorage.setItem("cet6-last-export", String(Date.now())); } catch (e) {}
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   };
   document.getElementById("btnImport").onclick = () => {
@@ -796,6 +967,27 @@ function renderStats(){
     };
     inp.click();
   };
+  // 备份状态提示
+  const stEl = document.getElementById("bkStatus");
+  if (stEl) {
+    let last = 0;
+    try { last = parseInt(localStorage.getItem("cet6-last-export") || "0", 10) || 0; } catch (e) {}
+    const hasData = Object.keys(store).some(k => {
+      const r = store[k];
+      return r && Object.keys(r).some(kk => kk !== "_submitted" && kk !== "_at");
+    });
+    if (!hasData) {
+      stEl.innerHTML = '<span style="color:#8695a6">还没有做题记录。</span>';
+    } else if (!last) {
+      stEl.innerHTML = '<span style="color:#b06d00;font-weight:600">⚠ 从未备份过。建议现在点「导出记录 JSON」存一份。</span>';
+    } else {
+      const days = Math.floor((Date.now() - last) / 86400000);
+      const when = days === 0 ? "今天" : days + " 天前";
+      const color = days >= 7 ? "#b06d00" : "#1d7a45";
+      const tip = days >= 7 ? "　⚠ 超过一周没备份了" : "";
+      stEl.innerHTML = '<span style="color:' + color + ';font-weight:600">上次备份：' + when + tip + '</span>';
+    }
+  }
   document.getElementById("btnCsv").onclick = () => {
     const lines = ["paper,题号,我的答案,正确答案,对错,错因"];
     PAPERS.forEach(pid => {
