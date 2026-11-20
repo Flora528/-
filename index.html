@@ -163,7 +163,7 @@
 </head>
 <body>
 <header>
-  <h1>六级判分台</h1><span class="ver">11-20 00:08</span>
+  <h1>六级判分台</h1><span class="ver">11-20 14:42</span>
   <select id="paper"></select>
   <span class="stat">已答 <b id="done">0</b>/20</span>
   <span class="spacer"></span>
@@ -238,6 +238,16 @@ function statOf(pid){
   }
   return { done, hit, submitted: !!r._submitted };
 }
+// 710 分制折算：长篇每题 7.1（满分 71），仔细每题 14.2（满分 142）
+const PT_MATCH = 7.1, PT_CARE = 14.2, MAX_READ = 248.5;
+function score710(pid){
+  const r = rec(pid);
+  let a1 = 0, a2 = 0;
+  for (let n = 36; n <= 45; n++) { const o = r[n]; if (o && o.a && o.a === correctOf(pid, n)) a1++; }
+  for (let n = 46; n <= 55; n++) { const o = r[n]; if (o && o.a && o.a === correctOf(pid, n)) a2++; }
+  return { a1: a1, a2: a2, pt: a1 * PT_MATCH + a2 * PT_CARE };
+}
+
 function allWrong(includeMastered){
   const out = [];
   PAPERS.forEach(pid => {
@@ -429,7 +439,10 @@ function renderSubmitBar(){
   } else {
     const info = document.createElement("span");
     info.className = "info";
-    info.innerHTML = "得分 <b>" + st.hit + "</b>/" + st.done + "　正确率 " + (st.done ? Math.round(st.hit * 100 / st.done) : 0) + "%";
+    const s7 = score710(cur);
+    info.innerHTML = "得分 <b>" + st.hit + "</b>/20　正确率 " + Math.round(st.hit * 100 / 20) + "%" +
+      '　<span style="color:#2e5c9a;font-weight:600">阅读折算 ' + s7.pt.toFixed(1) + ' / ' + MAX_READ + '</span>' +
+      ' <span style="font-size:11px;color:#9aa8b8">710分制</span>';
     bar.appendChild(info);
     const sp = document.createElement("span");
     sp.className = "spacer";
@@ -1004,6 +1017,7 @@ function renderStats(){
   PAPERS.forEach(pid => {
     const r = rec(pid);
     if (r._submitted) submitted++;
+    const base = r._submitted ? 30 : 0;   // 提交后按 30 题计满分（选词填空算全错）
     let d = 0, h = 0;
     for (let n = 36; n <= 55; n++) {
       const o = r[n]; if (!o || !o.a) continue;
@@ -1017,12 +1031,20 @@ function renderStats(){
     if (r._submitted) rows.push([pid, h, d, !!r._submitted]);
   });
 
+  let totPt = 0, totMax = 0;
+  PAPERS.forEach(pid => {
+    if (!rec(pid)._submitted) return;
+    const s7 = score710(pid);
+    totPt += s7.pt;
+    totMax += MAX_READ;
+  });
   let html = '<div class="card"><h3>总览</h3><div class="flex">' +
-    '<div><div class="big">' + (done ? Math.round(hit * 100 / done) + "%" : "—") + '</div><div class="muted">总正确率</div></div>' +
-    '<div><div class="big">' + hit + " / " + done + '</div><div class="muted">答对 / 已答</div></div>' +
+    '<div><div class="big">' + (done ? Math.round(hit * 100 / done) + "%" : "—") + '</div><div class="muted">总正确率（按20题/套）</div></div>' +
+    '<div><div class="big">' + hit + " / " + done + '</div><div class="muted">答对 / 实际作答</div></div>' +
     '<div><div class="big">' + submitted + '</div><div class="muted">已提交套数</div></div>' +
-    '<div><div class="big">' + (12 * 20 - done) + '</div><div class="muted">未答</div></div>' +
-    '</div></div>';
+    '<div><div class="big" style="color:#2e5c9a">' + (totMax ? totPt.toFixed(1) : "—") + '</div><div class="muted">阅读折算总分</div></div>' +
+    '</div>' +
+    '<div class="muted" style="margin-top:10px">710 分制：长篇每题 ' + PT_MATCH + ' 分、仔细每题 ' + PT_CARE + ' 分；阅读满分 ' + MAX_READ + '，选词填空未做得 0 分。</div></div>';
 
   html += '<div class="card"><h3>分题型正确率</h3>';
   Object.keys(byType).forEach(t => {
@@ -1044,9 +1066,12 @@ function renderStats(){
   html += '</div>';
 
   if (rows.length) {
-    html += '<div class="card"><h3>各套进度</h3><table><tr><th>套次</th><th>答对</th><th>已答</th><th>正确率</th><th>状态</th></tr>';
+    html += '<div class="card"><h3>各套进度</h3><table><tr><th>套次</th><th>答对</th><th>实答</th><th>正确率</th><th>折算分</th><th>状态</th></tr>';
     rows.forEach(([pid, h, d, sub]) => {
-      html += '<tr><td class="k">' + pid + '</td><td>' + h + '</td><td>' + d + '</td><td>' + Math.round(h * 100 / d) + '%</td><td>' + (sub ? "已提交" : "作答中") + '</td></tr>';
+      const s7 = score710(pid);
+      html += '<tr><td class="k">' + pid + '</td><td>' + h + '</td><td>' + d + '</td><td>' +
+        (d ? Math.round(h * 100 / d) + '%' : '—') + '</td><td>' + s7.pt.toFixed(1) + '</td><td>' +
+        (sub ? "已提交" : "作答中") + '</td></tr>';
     });
     html += '</table></div>';
   }
