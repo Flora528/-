@@ -177,7 +177,7 @@
 </head>
 <body>
 <header>
-  <h1>六级判分台</h1><span class="ver">11-21 10:28</span>
+  <h1>六级判分台</h1><span class="ver">11-21 10:33</span>
   <select id="paper"></select>
   <span class="stat">已答 <b id="done">0</b>/20</span>
   <span class="spacer"></span>
@@ -1160,81 +1160,130 @@ function renderWords(){
   if (sc > 0) window.scrollTo(0, sc);
 }
 
-// ---------- 全量文本导出 / 导入（绕过文件下载） ----------
-function exportAllText(){
-  const payload = {
-    v: 2,
-    judge: store,
-    words: wState,
-    lisMine: lisMine,
-    lisAns: lisAns,
-    lisMeta: lisMeta,
-    daily: daily
-  };
-  return JSON.stringify(payload);
+// ---------- 全量文本导出 / 导入（压缩 + 分段，绕过 5000 字符截断） ----------
+const CHUNK = 3500;
+
+function packAll(){
+  const w = {};
+  for (const k in wState) {
+    const v = wState[k] || {};
+    const a = [v.done ? 1 : 0, v.def || "", v.imp || 0, v.learnedAt || "", v.stage || 0, v.next || ""];
+    while (a.length && !a[a.length - 1]) a.pop();
+    if (a.length) w[k] = a;
+  }
+  return JSON.stringify({ v: 3, j: store, w: w, lm: lisMine, la: lisAns, lx: lisMeta, d: daily });
+}
+
+function unpackAll(o){
+  let n = 0;
+  if (o.j) { for (const k in o.j) { store[k] = o.j[k]; n++; } }
+  if (o.w) {
+    for (const k in o.w) {
+      const a = o.w[k] || [];
+      wState[k] = {
+        done: !!a[0],
+        def: a[1] || "",
+        imp: a[2] || 0,
+        learnedAt: a[3] || "",
+        stage: typeof a[4] === "number" ? a[4] : 0,
+        next: a[5] || ""
+      };
+      n++;
+    }
+  }
+  if (o.lm) { for (const k in o.lm) { lisMine[k] = o.lm[k]; n++; } }
+  if (o.la) { for (const k in o.la) { lisAns[k] = o.la[k]; n++; } }
+  if (o.lx) { for (const k in o.lx) { lisMeta[k] = o.lx[k]; n++; } }
+  if (o.d) { daily = Object.assign(daily, o.d); }
+  save(); wsave(); lsaveMine(); lsaveAns(); lsaveMeta(); dsave();
+  return n;
+}
+
+function splitChunks(txt){
+  const out = [];
+  for (let i = 0; i < txt.length; i += CHUNK) out.push(txt.slice(i, i + CHUNK));
+  return out.length ? out : [""];
 }
 
 function openTextExport(){
-  const txt = exportAllText();
+  const txt = packAll();
+  const chunks = splitChunks(txt);
+  let idx = 0;
   const m = document.createElement("div");
   m.className = "modal on";
   m.innerHTML = '<div class="box">' +
-    '<h3>导出记录（文本）</h3>' +
-    '<div class="hint">长按下面框里的文字 → 全选 → 复制。<br>然后发到微信文件传输助手，或直接粘贴到新浏览器的「导入记录」里。</div>' +
-    '<textarea id="expText" readonly style="height:200px;font-size:11px"></textarea>' +
-    '<div class="hint" id="expInfo">共 ' + txt.length + ' 字符</div>' +
+    '<h3>导出记录（分段复制）</h3>' +
+    '<div class="hint">共 ' + txt.length + ' 字符，分成 <b>' + chunks.length + ' 段</b>。<br>' +
+    '每次点「复制本段」，粘到微信发给自己；<b>全部 ' + chunks.length + ' 段都要复制</b>，导入时按顺序粘贴。</div>' +
+    '<textarea id="expText" readonly style="height:150px;font-size:11px"></textarea>' +
+    '<div class="hint" id="expInfo"></div>' +
     '<div class="acts">' +
-      '<button class="btn btn-ghost" id="expSel">全选</button>' +
-      '<button class="btn btn-ghost" id="expCopy">复制</button>' +
-      '<button class="btn btn-primary" id="expClose">关闭</button>' +
+      '<button class="btn btn-ghost" id="expPrev">上一段</button>' +
+      '<button class="btn btn-primary" id="expCopy">复制本段</button>' +
+      '<button class="btn btn-ghost" id="expNext">下一段</button>' +
+      '<button class="btn btn-ghost" id="expClose">关闭</button>' +
     '</div></div>';
   document.body.appendChild(m);
   const ta = m.querySelector("#expText");
-  ta.value = txt;
-  m.querySelector("#expSel").onclick = () => { ta.focus(); ta.select(); ta.setSelectionRange(0, ta.value.length); };
+  const info = m.querySelector("#expInfo");
+  const paint = () => {
+    ta.value = chunks[idx];
+    info.textContent = "第 " + (idx + 1) + " / " + chunks.length + " 段　（本段 " + chunks[idx].length + " 字符）";
+    m.querySelector("#expPrev").disabled = idx === 0;
+    m.querySelector("#expNext").disabled = idx === chunks.length - 1;
+  };
+  paint();
+  m.querySelector("#expPrev").onclick = () => { if (idx > 0) { idx--; paint(); } };
+  m.querySelector("#expNext").onclick = () => { if (idx < chunks.length - 1) { idx++; paint(); } };
   m.querySelector("#expCopy").onclick = async () => {
-    ta.focus(); ta.select();
-    try { await navigator.clipboard.writeText(txt); m.querySelector("#expInfo").textContent = "已复制，共 " + txt.length + " 字符"; }
-    catch (e) { document.execCommand("copy"); m.querySelector("#expInfo").textContent = "已复制（兼容模式）"; }
+    ta.focus(); ta.select(); ta.setSelectionRange(0, ta.value.length);
+    try { await navigator.clipboard.writeText(chunks[idx]); info.textContent = "已复制第 " + (idx + 1) + " 段"; }
+    catch (e) { document.execCommand("copy"); info.textContent = "已复制第 " + (idx + 1) + " 段（兼容模式）"; }
   };
   m.querySelector("#expClose").onclick = () => m.remove();
 }
 
 function openTextImport(){
+  let buf = "";
   const m = document.createElement("div");
   m.className = "modal on";
   m.innerHTML = '<div class="box">' +
-    '<h3>导入记录（文本）</h3>' +
-    '<div class="hint">把之前「导出记录」复制的那段文字粘进来，点导入。</div>' +
-    '<textarea id="impText2" placeholder="粘贴导出文本..."></textarea>' +
-    '<div class="hint" id="impInfo2"></div>' +
-    '<div class="acts"><button class="btn btn-ghost" id="impCancel2">取消</button>' +
-    '<button class="btn btn-primary" id="impOk2">导入</button></div></div>';
+    '<h3>导入记录（分段粘贴）</h3>' +
+    '<div class="hint">按顺序粘：粘一段 → 点「追加」→ 清空粘下一段。<br>全部追加完再点「导入」。</div>' +
+    '<textarea id="impText2" placeholder="粘贴第 1 段..."></textarea>' +
+    '<div class="hint" id="impInfo2">已收集 0 字符</div>' +
+    '<div class="acts">' +
+      '<button class="btn btn-ghost" id="impCancel2">取消</button>' +
+      '<button class="btn btn-primary" id="impAdd2">追加</button>' +
+      '<button class="btn btn-primary" id="impOk2">导入</button></div></div>';
   document.body.appendChild(m);
+  const ta = m.querySelector("#impText2");
   const info = m.querySelector("#impInfo2");
   m.querySelector("#impCancel2").onclick = () => m.remove();
+  m.querySelector("#impAdd2").onclick = () => {
+    const v = (ta.value || "").trim();
+    if (!v) return;
+    buf += v;
+    ta.value = "";
+    info.textContent = "已收集 " + buf.length + " 字符";
+    ta.focus();
+  };
   m.querySelector("#impOk2").onclick = () => {
+    const rest = (ta.value || "").trim();
+    const full = (buf + rest).trim();
+    if (!full) { info.textContent = "没有内容"; return; }
     try {
-      const o = JSON.parse(m.querySelector("#impText2").value.trim());
-      if (!o || typeof o !== "object") throw new Error("格式不对");
-      let n = 0;
-      if (o.judge) { for (const k in o.judge) { store[k] = o.judge[k]; n++; } }
-      if (o.words) { for (const k in o.words) { wState[k] = Object.assign(wState[k] || {}, o.words[k]); n++; } }
-      if (o.lisMine) { for (const k in o.lisMine) { lisMine[k] = Object.assign(lisMine[k] || {}, o.lisMine[k]); n++; } }
-      if (o.lisAns) { for (const k in o.lisAns) { lisAns[k] = Object.assign(lisAns[k] || {}, o.lisAns[k]); n++; } }
-      if (o.lisMeta) { for (const k in o.lisMeta) { lisMeta[k] = Object.assign(lisMeta[k] || {}, o.lisMeta[k]); n++; } }
-      if (o.daily) { daily = Object.assign(daily, o.daily); }
-      save(); wsave(); lsaveMine(); lsaveAns(); lsaveMeta(); dsave();
+      const o = JSON.parse(full);
+      const n = unpackAll(o);
       m.remove();
       render();
       alert("导入完成，合并 " + n + " 项记录。");
     } catch (e) {
-      info.textContent = "导入失败：" + e.message;
+      info.textContent = "导入失败：" + e.message + "（已收集 " + full.length + " 字符，检查是否漏了某段）";
       info.style.color = "#c0392b";
     }
   };
 }
-
 // 批量粘贴答案：extractLetters 从任意文本里抽出 A-D
 function extractLetters(text){
   const out = [];
